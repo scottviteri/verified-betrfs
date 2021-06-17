@@ -1,7 +1,7 @@
 include "../../lib/Lang/NativeTypes.s.dfy"
 include "../../lib/Base/Option.s.dfy"
 
-module FileSysTypes {
+module FSTypes {
   import opened NativeTypes
   import opened Options
 
@@ -41,6 +41,8 @@ module FileSysTypes {
   {
     []
   }
+
+  datatype DirEntry = DirEntry(id: int, path: Path, ftype: FileType)
 
   //  datatype Stat = Stat(
   //   nlink: int,       // number of hard links

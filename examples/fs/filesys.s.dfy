@@ -1,6 +1,5 @@
 include "fstypes.s.dfy"
-include "../../lib/Base/Maps.i.dfy"
-include "../../lib/Base/Sequences.i.dfy"
+include "../../lib/Lang/System/SeqComparison.s.dfy"
 
 /*
  * This file system doesn't specify any permission checking or path cleanup: relying on shim/vfs to do so.
@@ -8,8 +7,9 @@ include "../../lib/Base/Sequences.i.dfy"
 */
 
 module FileSys {
-  import opened FileSysTypes
-  import opened Sequences
+  import opened FSTypes
+  import opened Options
+  import SeqComparison
 
   const DefaultId := -1;
 
@@ -50,8 +50,8 @@ module FileSys {
 
   function GetParentDir(path: Path): Path
   {
-    if |path| == 0 || Last(path) as int == '/' as int 
-    then path else GetParentDir(DropLast(path))
+    if |path| == 0 || path[|path|-1] as int == '/' as int 
+    then path else GetParentDir(path[..|path|-1])
   }
 
   predicate ValidNewPath(fs: FileSys, path: Path)
@@ -65,10 +65,16 @@ module FileSys {
 
   predicate InDir(dir: Path, path: Path)
   {
-    reveal_IsPrefix();
     && path != dir
-    && IsPrefix(dir, path)
+    && |path| > |dir|
+    && path[..|dir|] == dir
     && path[|dir|] as int == '/' as int
+  }
+
+  predicate IsDirEntry(dir: Path, path: Path)
+  {
+    && InDir(dir, path)
+    && (forall k | k in path[|dir|+1..] :: k as int != '/' as int)
   }
 
   predicate IsEmptyDir(fs: FileSys, dir: Path)
@@ -225,12 +231,13 @@ module FileSys {
     && fs'.data_map == (if ValidPath(fs, dst) then fs.data_map[dst_id := DataDelete(fs, dst_id)] else fs.data_map)
   }
 
+  // rename is a map because we allow directory
   predicate Rename(fs: FileSys, fs':FileSys, src: Path, dst: Path, ctime: Time)
   {
     && WF(fs)
     && WF(fs')
     && ValidPath(fs, src)
-    && !IsPrefix(src, dst)
+    && !(|dst| >= |src| && dst[..|src|] == src) // src can't be a prefix of dst
     && (ValidPath(fs, dst) || ValidNewPath(fs, dst))
     && var src_m := fs.meta_map[fs.path_map[src]];
     && (src_m.ftype.Directory? ==> RenameDir(fs, fs', src, dst, ctime))
@@ -362,11 +369,34 @@ module FileSys {
     && fs'.data_map == fs.data_map
   }
 
-  predicate ReadDir(fs: FileSys, fs':FileSys, path: Path)
+  predicate ValidDirEntry(fs: FileSys, de: DirEntry)
+  requires WF(fs)
+  {
+    && ValidPath(fs, de.path) // valid path
+    && de.id == fs.path_map[de.path]
+    && de.ftype == fs.meta_map[de.id].ftype
+  }
+
+  predicate ReadDir(fs: FileSys, fs':FileSys, dir: Path, start: Option<Path>, results: seq<DirEntry>, done: bool)
   {
     && WF(fs)
     && fs' == fs
-    // TODO
+    && ValidPath(fs, dir)
+    && fs.meta_map[fs.path_map[dir]].ftype.Directory?
+    && (start.Some? ==> InDir(dir, start.value))
+    // results consistent with filesys content
+    && (forall i | 0 <= i < |results| :: ValidDirEntry(fs, results[i]))
+    // results actually belong to this directory
+    && (forall i | 0 <= i < |results| :: IsDirEntry(dir, results[i].path))
+    // results are strictly sorted
+    && (forall i, j | 0 <= i < j < |results| :: SeqComparison.lt(results[i].path, results[j].path))
+    // results don't skip over any valid entry
+    && (forall path |
+        && IsDirEntry(dir, path)
+        && ValidPath(fs, path)
+        && (start.Some? ==> SeqComparison.lte(path, start.value))
+        && (!done && |results| > 0 ==> SeqComparison.lt(results[|results|-1].path, path))
+        :: (exists i :: 0 <= i < |results| && results[i].path == path))
   }
 
   predicate Stutter(fs: FileSys, fs': FileSys)
@@ -388,7 +418,7 @@ module FileSys {
     | ReadStep(path: Path, offset: int, size: int, data: Data)
     | WriteStep(path: Path, offset: int, size: int, data: Data, time: Time)
     | UpdateTimeStep(path: Path, atime: Time, mtime: Time, ctime: Time) 
-    | ReadDirStep(path: Path) // TODO: fill in rest of params: starting entry, end as we stop seeing one with prefix
+    | ReadDirStep(dir: Path, start: Option<Path>, results: seq<DirEntry>, done: bool)
     | StutterStep
 
   predicate NextStep(fs: FileSys, fs': FileSys, step:Step)
@@ -408,7 +438,7 @@ module FileSys {
       case ReadStep(path, offset, size, data) => Read(fs, fs', path, offset, size, data)
       case WriteStep(path, offset, size, data, time) => Write(fs, fs', path, offset, size, data, time)
       case UpdateTimeStep(path, atime, mtime, ctime) => UpdateTime(fs, fs', path, atime, mtime, ctime)
-      case ReadDirStep(path) => ReadDir(fs, fs', path)
+      case ReadDirStep(dir, start, results, done) => ReadDir(fs, fs', dir, start, results, done)
       case StutterStep() => Stutter(fs, fs')
     }
   }
