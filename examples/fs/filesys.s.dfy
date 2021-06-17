@@ -39,6 +39,8 @@ module FileSys {
   //   && path[0] as int == '/' as int
   // }
 
+  // TODO: extract path related/name hierarchy out of here.
+
   predicate ValidPath(fs: FileSys, path: Path)
   requires WF(fs)
   {
@@ -61,11 +63,18 @@ module FileSys {
     && fs.path_map[path] == DefaultId
   }
 
+  predicate InDir(dir: Path, path: Path)
+  {
+    reveal_IsPrefix();
+    && path != dir
+    && IsPrefix(dir, path)
+    && path[|dir|] as int == '/' as int
+  }
+
   predicate IsEmptyDir(fs: FileSys, dir: Path)
   requires WF(fs)
   {
-    reveal_IsPrefix();
-    && (forall k | k != dir && IsPrefix(dir, k) && k[|dir|] as int == '/' as int :: fs.path_map[k] == DefaultId)
+    && (forall k | InDir(dir, k) :: fs.path_map[k] == DefaultId)
   }
 
   predicate ValidNewMetaData(m: MetaData)
@@ -115,6 +124,24 @@ module FileSys {
     MetaData(m.nlink+delta, m.size, m.ftype, m.perm, m.uid, m.gid, m.atime, m.mtime, ctime)
   }
 
+  function MetaDataDelete(fs: FileSys, id: int, ctime: Time): MetaData
+  requires WF(fs)
+  requires id != DefaultId
+  {
+    if fs.meta_map[id].nlink == 1
+    then EmptyMetaData()
+    else MetaDataUpdateLink(fs.meta_map[id], -1, ctime)
+  }
+
+  function DataDelete(fs: FileSys, id: int): Data
+  requires WF(fs)
+  requires id != DefaultId
+  {
+    if fs.meta_map[id].nlink == 1
+    then EmptyData()
+    else fs.data_map[id]
+  }
+
   predicate Delete(fs: FileSys, fs':FileSys, path: Path, ctime: Time)
   {
     && WF(fs)
@@ -124,12 +151,8 @@ module FileSys {
     && (fs.meta_map[id].ftype.Directory? ==> IsEmptyDir(fs, path))
     // maps after delete
     && fs'.path_map == fs.path_map[path := DefaultId]
-    && (fs.meta_map[id].nlink == 1 ==> 
-        && fs'.meta_map == fs.meta_map[id := EmptyMetaData()]
-        && fs'.data_map == fs.data_map[id := EmptyData()])
-    && (fs.meta_map[id].nlink > 1 ==> 
-        && fs'.meta_map == fs.meta_map[id := MetaDataUpdateLink(fs.meta_map[id], -1, ctime)]
-        && fs'.data_map == fs.data_map)
+    && fs'.meta_map == fs.meta_map[id := MetaDataDelete(fs, id, ctime)]
+    && fs'.data_map == fs.data_map[id := DataDelete(fs, id)]
   }
 
   predicate SymLink(fs: FileSys, fs':FileSys, source: Path, dest: Path, id: int, m: MetaData)
@@ -148,12 +171,70 @@ module FileSys {
     && fs'.data_map == fs.data_map
   }
 
-  // rename is a map because we allow directory
-  predicate Rename(fs: FileSys, fs':FileSys, rename_map: imap<Path, Path>, flags: int)
+  function PathMapRenameDir(fs: FileSys, src: Path, dst: Path): PathMap
+  requires WF(fs)
+  {
+    imap path :: 
+      // remove source paths
+      if path == src || InDir(src, path) then DefaultId
+      // redirect renamed paths to point to the same ids as source
+      else if path == dst then fs.path_map[src]
+      else if InDir(dst, path) then fs.path_map[src + path[|dst|+1..]]
+      // everything else remains the same
+      else fs.path_map[path]
+  }
+
+  predicate RenameDir(fs: FileSys, fs':FileSys, src: Path, dst: Path, ctime: Time)
+  requires WF(fs)
+  requires WF(fs')
+  requires ValidPath(fs, src)
+  requires ValidPath(fs, dst) || ValidNewPath(fs, dst)
+  {
+    var src_id := fs.path_map[src];
+    var dst_id := fs.path_map[dst];
+    var src_m := fs.meta_map[src_id];
+    var src_m' := MetaDataUpdateTime(src_m, src_m.atime, src_m.mtime, ctime);
+    && src_m.ftype.Directory?
+    && (ValidPath(fs, dst) ==>
+      && fs.meta_map[fs.path_map[dst]].ftype.Directory?
+      && IsEmptyDir(fs, dst))
+    // updated maps
+    && fs'.path_map == PathMapRenameDir(fs, src, dst)
+    && fs'.meta_map == (if ValidPath(fs, dst) then fs.meta_map[src_id := src_m'][dst_id := EmptyMetaData()] else fs.meta_map[src_id := src_m'])
+    && fs'.data_map == fs.data_map
+  }
+
+  predicate RenameNonDir(fs: FileSys, fs':FileSys, src: Path, dst: Path, ctime: Time)
+  requires WF(fs)
+  requires WF(fs')
+  requires ValidPath(fs, src)
+  requires ValidPath(fs, dst) || ValidNewPath(fs, dst)
+  {
+    var src_id := fs.path_map[src];
+    var dst_id := fs.path_map[dst];
+    var src_m := fs.meta_map[src_id];
+    var src_m' := MetaDataUpdateTime(src_m, src_m.atime, src_m.mtime, ctime);
+    && !src_m.ftype.Directory? // file, symlink, dev file, fifo, socket
+    && (ValidPath(fs, dst) ==> !fs.meta_map[dst_id].ftype.Directory?)
+    // updated maps
+    && fs'.path_map == fs.path_map[dst := src_id][src := DefaultId]
+    && fs'.meta_map == 
+      (if ValidPath(fs, dst)
+      then fs.meta_map[src_id := src_m'][dst_id := MetaDataDelete(fs, dst_id, ctime)]
+      else fs.meta_map[src_id := src_m'])
+    && fs'.data_map == (if ValidPath(fs, dst) then fs.data_map[dst_id := DataDelete(fs, dst_id)] else fs.data_map)
+  }
+
+  predicate Rename(fs: FileSys, fs':FileSys, src: Path, dst: Path, ctime: Time)
   {
     && WF(fs)
     && WF(fs')
-    // TODO
+    && ValidPath(fs, src)
+    && !IsPrefix(src, dst)
+    && (ValidPath(fs, dst) || ValidNewPath(fs, dst))
+    && var src_m := fs.meta_map[fs.path_map[src]];
+    && (src_m.ftype.Directory? ==> RenameDir(fs, fs', src, dst, ctime))
+    && (!src_m.ftype.Directory? ==> RenameNonDir(fs, fs', src, dst, ctime))
   }
 
   predicate Link(fs: FileSys, fs':FileSys, source: Path, dest: Path, ctime: Time)
@@ -268,7 +349,7 @@ module FileSys {
   function MetaDataUpdateTime(m: MetaData, atime: Time, mtime: Time, ctime: Time): MetaData
   {
     MetaData(m.nlink, m.size, m.ftype, m.perm, m.uid, m.gid, atime, mtime, ctime)
-  } 
+  }
 
   predicate UpdateTime(fs: FileSys, fs':FileSys, path: Path, atime: Time, mtime: Time, ctime: Time)
   {
@@ -299,8 +380,8 @@ module FileSys {
     | ReadLinkStep(path: Path, link_path: Path)
     | CreateStep(path: Path, id: int, m: MetaData) // mknod and mkdir
     | DeleteStep(path: Path, ctime: Time) // unlink and rmdir
-    | SymLinkStep(source: Path, dest: Path, id: int, m: MetaData) // how to? path vs map? path: Path, link_path: Path
-    | RenameStep(rename_map: imap<Path, Path>, flags: int) // a map of path to renames?
+    | SymLinkStep(source: Path, dest: Path, id: int, m: MetaData)
+    | RenameStep(source: Path, dest: Path, ctime: Time)
     | LinkStep(source: Path, dest: Path, ctime: Time)
     | ChangeAttrStep(path: Path, perm: int, uid: int, gid: int, ctime: Time) // chmod + chown
     | TruncateStep(path: Path, size: int, time: Time)
@@ -318,7 +399,7 @@ module FileSys {
       case CreateStep(path, id, m) => Create(fs, fs', path, id, m)
       case DeleteStep(path, ctime) => Delete(fs, fs', path, ctime)
       case SymLinkStep(source, dest, id, m) => SymLink(fs, fs', source, dest, id, m)
-      case RenameStep(rename_map, flags) => Rename(fs, fs', rename_map, flags)
+      case RenameStep(source, dest, ctime) => Rename(fs, fs', source, dest, ctime)
       case LinkStep(source, dest, ctime) => Link(fs, fs', source, dest, ctime)
       case ChangeAttrStep(path, perm, uid, gid, ctime) => ChangeAttr(fs, fs', path, perm, uid, gid, ctime)
       // case ChmodStep(path, mode, ctime) => Chmod(fs, fs', path, mode, ctime)
