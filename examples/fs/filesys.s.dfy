@@ -33,18 +33,19 @@ module FileSys {
     FileSys(path_map, meta_map, data_map)
   }
 
-  // predicate IsAbsolutePath(path: Path)
-  // {
-  //   && |path| > 0
-  //   && path[0] as int == '/' as int
-  // }
+  predicate IsAbsolutePath(path: Path)
+  {
+    && |path| > 0
+    && path[0] as int == '/' as int
+  }
 
   // TODO: extract path related/name hierarchy out of here.
 
   predicate ValidPath(fs: FileSys, path: Path)
   requires WF(fs)
   {
-    // && IsAbsolutePath(path)
+    && IsAbsolutePath(path)
+    // && (|path| > 1 ==> path[|path|-1] as int != '/' as int)
     && fs.path_map[path] != DefaultId
   }
 
@@ -54,12 +55,18 @@ module FileSys {
     then path else GetParentDir(path[..|path|-1])
   }
 
+  predicate ValidParentDir(fs: FileSys, path: Path)
+  requires WF(fs)
+  {
+    var parentdir := GetParentDir(path);
+    && ValidPath(fs, parentdir)
+    && fs.meta_map[fs.path_map[parentdir]].ftype.Directory?
+  }
+
   predicate ValidNewPath(fs: FileSys, path: Path)
   requires WF(fs)
   {
-    && var parentdir := GetParentDir(path);
-    && ValidPath(fs, parentdir)
-    && fs.meta_map[fs.path_map[parentdir]].ftype.Directory?
+    && ValidParentDir(fs, path)
     && fs.path_map[path] == DefaultId
   }
 
@@ -448,38 +455,36 @@ module FileSys {
     exists step :: NextStep(fs, fs', step)
   }
 
-  // connectedness of metadata tree
   predicate Inv(fs: FileSys)
   {
     && WF(fs)
-
-    // for any given path? 
-    // I guess 
-
-    // In inv, nlink allowed if it's a file
-
-    // how do we represent connectedness? 
-    // for any path name
-
-    // metadata tree
-    //
-    // path has to be a tree (at least for metadata), connectedness properties ( file path's dependency?), leafs are leafs (/a/b, no /a/b/c)
-    // data map just leaf entries,
-    // relationship between two maps: file: consistency check for meta map size and data_map?
-    //           what about data map with non empty entry but no corresponding metadata
-
-    // TODOs
+    // Path map internal concistency: invalid path isn't allocated
+    && (forall path | !ValidPath(fs, path) :: fs.path_map[path] == DefaultId)
+    // Metadata map internal consistency: directory has no hardlinks
+    && (forall path | ValidPath(fs, path) :: 
+      var m := fs.meta_map[fs.path_map[path]];
+      && (m.ftype.Directory? ==> m.nlink == 1))
+    // Path and meta map consistency: directory structure is connected
+    && (forall path | ValidPath(fs, path) :: ValidParentDir(fs, path))
+    // Path and meta map consistency: allocated path has non empty metadata
+    && (forall path | ValidPath(fs, path) :: fs.meta_map[fs.path_map[path]] != EmptyMetaData())
+    // Meta and data map consistency: metadata size is consistent with actual data size
+    && (forall path | ValidPath(fs, path) ::
+      var id := fs.path_map[path];
+      && fs.meta_map[id].size == |fs.data_map[id]|)
+    // Q: also require negative side?
+    // eg. requiring meta map to have empty metadata for unallocated id entries
+    // can do so by generating a set of ids that are allocated and write conditions based on that
   }
 
   lemma InitImpliesInv(fs: FileSys)
   {
   }
 
-  lemma NextPreservesInv(fs: FileSys, fs': FileSys) // add ui op
+  lemma NextPreservesInv(fs: FileSys, fs': FileSys) // TODO: add ui op
   {
   }
-
-   
+  
     /*
       | MknodStep(path: Path, mode: Mode, rdev_id: int) // will have entry in data map
       | MkdirStep(path: Path, mode: Mode) // only entry in metadata
@@ -502,6 +507,4 @@ module FileSys {
         access (relying on kernel vfs), create (create + open), destroy (clean up a filesys), lock (flock), 
         bmap (map inode # to blk #), fallocate and so on
     */
-
-
 }
