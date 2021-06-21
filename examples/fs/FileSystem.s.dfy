@@ -1,4 +1,8 @@
-include "fstypes.s.dfy"
+// Copyright 2018-2021 VMware, Inc., Microsoft Inc., Carnegie Mellon University, ETH Zurich, and University of Washington
+// SPDX-License-Identifier: BSD-2-Clause
+
+
+include "FSTypes.s.dfy"
 include "../../lib/Lang/System/SeqComparison.s.dfy"
 
 /*
@@ -6,14 +10,12 @@ include "../../lib/Lang/System/SeqComparison.s.dfy"
  * It is a completely in memory filesystem, no knowledge of device and persistence.
 */
 
-module FileSys {
+module FileSystem {
   import opened FSTypes
+  import opened PathSpec
   import opened Options
   import SeqComparison
 
-  const DefaultId := -1;
-
-  type PathMap = imap<Path, int>
   type MetaView = imap<int, MetaData>
   type DataView = imap<int, Data> 
 
@@ -21,80 +23,15 @@ module FileSys {
 
   predicate WF(fs: FileSys)
   {
-    && (forall path :: path in fs.path_map)
+    && PathComplete(fs.path_map)
     && (forall id :: id in fs.meta_map && id in fs.data_map)
   }
 
-  function EmptyFS() : (fs : FileSys)
+  predicate Init(fs: FileSys)
   {
-    var path_map := imap path :: DefaultId;
-    var meta_map := imap id :: EmptyMetaData();
-    var data_map := imap id :: EmptyData();
-    FileSys(path_map, meta_map, data_map)
-  }
-
-  predicate IsAbsolutePath(path: Path)
-  {
-    && |path| > 0
-    && path[0] as int == '/' as int
-  }
-
-  // TODO: extract path related/name hierarchy out of here.
-
-  predicate ValidPath(fs: FileSys, path: Path)
-  requires WF(fs)
-  {
-    && IsAbsolutePath(path)
-    // && (|path| > 1 ==> path[|path|-1] as int != '/' as int)
-    && fs.path_map[path] != DefaultId
-  }
-
-  function GetParentDir(path: Path): Path
-  {
-    if |path| == 0 || path[|path|-1] as int == '/' as int 
-    then path else GetParentDir(path[..|path|-1])
-  }
-
-  predicate ValidParentDir(fs: FileSys, path: Path)
-  requires WF(fs)
-  {
-    var parentdir := GetParentDir(path);
-    && ValidPath(fs, parentdir)
-    && fs.meta_map[fs.path_map[parentdir]].ftype.Directory?
-  }
-
-  predicate ValidNewPath(fs: FileSys, path: Path)
-  requires WF(fs)
-  {
-    && ValidParentDir(fs, path)
-    && fs.path_map[path] == DefaultId
-  }
-
-  predicate InDir(dir: Path, path: Path)
-  {
-    && path != dir
-    && |path| > |dir|
-    && path[..|dir|] == dir
-    && path[|dir|] as int == '/' as int
-  }
-
-  predicate IsDirEntry(dir: Path, path: Path)
-  {
-    && InDir(dir, path)
-    && (forall k | k in path[|dir|+1..] :: k as int != '/' as int)
-  }
-
-  predicate IsEmptyDir(fs: FileSys, dir: Path)
-  requires WF(fs)
-  {
-    && (forall k | InDir(dir, k) :: fs.path_map[k] == DefaultId)
-  }
-
-  predicate ValidNewMetaData(m: MetaData)
-  {
-    && m.atime == m.ctime == m.mtime
-    && m.size == 0
-    && m.nlink == 1
+    && fs.path_map == InitPathMap()
+    && fs.meta_map == (imap id :: if id == RootId then InitRootMetaData() else EmptyMetaData())
+    && fs.data_map == (imap id :: EmptyData())
   }
 
   // FileSys Ops
@@ -102,7 +39,7 @@ module FileSys {
   predicate GetAttr(fs: FileSys, fs':FileSys, path: Path, attr: MetaData)
   {
     && WF(fs)
-    && ValidPath(fs, path)
+    && ValidPath(fs.path_map, path)
     && fs' == fs
     && attr == fs.meta_map[fs.path_map[path]]
   }
@@ -110,7 +47,7 @@ module FileSys {
   predicate ReadLink(fs: FileSys, fs':FileSys, path: Path, link_path: Path)
   {
     && WF(fs)
-    && ValidPath(fs, path)
+    && ValidPath(fs.path_map, path)
     && fs' == fs
     && fs.meta_map[fs.path_map[path]].ftype.SymLink?
     && link_path == fs.meta_map[fs.path_map[path]].ftype.source
@@ -120,7 +57,7 @@ module FileSys {
   {
     && WF(fs)
     && WF(fs')
-    && ValidNewPath(fs, path)
+    && ValidNewPath(fs.path_map, path)
     && ValidNewMetaData(m)
     && id != DefaultId
     // Entry Not Present
@@ -159,9 +96,9 @@ module FileSys {
   {
     && WF(fs)
     && WF(fs')
-    && ValidPath(fs, path)
+    && ValidPath(fs.path_map, path)
     && var id := fs.path_map[path];
-    && (fs.meta_map[id].ftype.Directory? ==> IsEmptyDir(fs, path))
+    && (fs.meta_map[id].ftype.Directory? ==> IsEmptyDir(fs.path_map, path))
     // maps after delete
     && fs'.path_map == fs.path_map[path := DefaultId]
     && fs'.meta_map == fs.meta_map[id := MetaDataDelete(fs, id, ctime)]
@@ -172,7 +109,7 @@ module FileSys {
   {
     && WF(fs)
     && WF(fs')
-    && ValidNewPath(fs, dest) // source doesn't need to be valid
+    && ValidNewPath(fs.path_map, dest) // source doesn't need to be valid
     && ValidNewMetaData(m)
     && m.ftype == FileType.SymLink(source)
     && id != DefaultId
@@ -200,42 +137,48 @@ module FileSys {
   predicate RenameDir(fs: FileSys, fs':FileSys, src: Path, dst: Path, ctime: Time)
   requires WF(fs)
   requires WF(fs')
-  requires ValidPath(fs, src)
-  requires ValidPath(fs, dst) || ValidNewPath(fs, dst)
+  requires ValidPath(fs.path_map, src)
+  requires ValidPath(fs.path_map, dst) || ValidNewPath(fs.path_map, dst)
   {
     var src_id := fs.path_map[src];
     var dst_id := fs.path_map[dst];
     var src_m := fs.meta_map[src_id];
     var src_m' := MetaDataUpdateTime(src_m, src_m.atime, src_m.mtime, ctime);
     && src_m.ftype.Directory?
-    && (ValidPath(fs, dst) ==>
+    && (ValidPath(fs.path_map, dst) ==>
       && fs.meta_map[fs.path_map[dst]].ftype.Directory?
-      && IsEmptyDir(fs, dst))
+      && IsEmptyDir(fs.path_map, dst))
     // updated maps
     && fs'.path_map == PathMapRenameDir(fs, src, dst)
-    && fs'.meta_map == (if ValidPath(fs, dst) then fs.meta_map[src_id := src_m'][dst_id := EmptyMetaData()] else fs.meta_map[src_id := src_m'])
+    && fs'.meta_map == (
+      if ValidPath(fs.path_map, dst)
+      then fs.meta_map[src_id := src_m'][dst_id := EmptyMetaData()]
+      else fs.meta_map[src_id := src_m'])
     && fs'.data_map == fs.data_map
   }
 
   predicate RenameNonDir(fs: FileSys, fs':FileSys, src: Path, dst: Path, ctime: Time)
   requires WF(fs)
   requires WF(fs')
-  requires ValidPath(fs, src)
-  requires ValidPath(fs, dst) || ValidNewPath(fs, dst)
+  requires ValidPath(fs.path_map, src)
+  requires ValidPath(fs.path_map, dst) || ValidNewPath(fs.path_map, dst)
   {
     var src_id := fs.path_map[src];
     var dst_id := fs.path_map[dst];
     var src_m := fs.meta_map[src_id];
     var src_m' := MetaDataUpdateTime(src_m, src_m.atime, src_m.mtime, ctime);
     && !src_m.ftype.Directory? // file, symlink, dev file, fifo, socket
-    && (ValidPath(fs, dst) ==> !fs.meta_map[dst_id].ftype.Directory?)
+    && (ValidPath(fs.path_map, dst) ==> !fs.meta_map[dst_id].ftype.Directory?)
     // updated maps
     && fs'.path_map == fs.path_map[dst := src_id][src := DefaultId]
-    && fs'.meta_map == 
-      (if ValidPath(fs, dst)
+    && fs'.meta_map == (
+      if ValidPath(fs.path_map, dst)
       then fs.meta_map[src_id := src_m'][dst_id := MetaDataDelete(fs, dst_id, ctime)]
       else fs.meta_map[src_id := src_m'])
-    && fs'.data_map == (if ValidPath(fs, dst) then fs.data_map[dst_id := DataDelete(fs, dst_id)] else fs.data_map)
+    && fs'.data_map == (
+      if ValidPath(fs.path_map, dst)
+      then fs.data_map[dst_id := DataDelete(fs, dst_id)]
+      else fs.data_map)
   }
 
   // rename is a map because we allow directory
@@ -243,9 +186,9 @@ module FileSys {
   {
     && WF(fs)
     && WF(fs')
-    && ValidPath(fs, src)
+    && ValidPath(fs.path_map, src)
     && !(|dst| >= |src| && dst[..|src|] == src) // src can't be a prefix of dst
-    && (ValidPath(fs, dst) || ValidNewPath(fs, dst))
+    && (ValidPath(fs.path_map, dst) || ValidNewPath(fs.path_map, dst))
     && var src_m := fs.meta_map[fs.path_map[src]];
     && (src_m.ftype.Directory? ==> RenameDir(fs, fs', src, dst, ctime))
     && (!src_m.ftype.Directory? ==> RenameNonDir(fs, fs', src, dst, ctime))
@@ -255,8 +198,8 @@ module FileSys {
   {
     && WF(fs)
     && WF(fs')
-    && ValidPath(fs, source)  // NOTE: won't work for hardlink other filesystem files
-    && ValidNewPath(fs, dest)
+    && ValidPath(fs.path_map, source)  // NOTE: won't work for hardlink other filesystem files
+    && ValidNewPath(fs.path_map, dest)
     && var id := fs.path_map[source];
     && !fs.meta_map[id].ftype.Directory?  // disallow directory hardlinks
     // updated maps
@@ -275,7 +218,7 @@ module FileSys {
   {
     && WF(fs)
     && WF(fs')
-    && ValidPath(fs, path)
+    && ValidPath(fs.path_map, path)
     && var id := fs.path_map[path];
     && fs'.path_map == fs.path_map
     && fs'.meta_map == fs.meta_map[id := MetaDataChangeAttr(fs.meta_map[id], perm, uid, gid, ctime)]
@@ -307,7 +250,7 @@ module FileSys {
     && WF(fs)
     && WF(fs')
     && 0 <= size
-    && ValidPath(fs, path)
+    && ValidPath(fs.path_map, path)
     && var id := fs.path_map[path];
     && fs.meta_map[id].ftype.File?
     && size != fs.meta_map[id].size
@@ -321,7 +264,7 @@ module FileSys {
   {
     && WF(fs)
     && fs' == fs
-    && ValidPath(fs, path)
+    && ValidPath(fs.path_map, path)
     && var id := fs.path_map[path];
     && fs.meta_map[id].ftype.File?
     && 0 <= offset <= offset+size <= fs.meta_map[id].size
@@ -348,7 +291,7 @@ module FileSys {
   {
     && WF(fs)
     && WF(fs')
-    && ValidPath(fs, path)
+    && ValidPath(fs.path_map, path)
     && |data| == size
     && var id := fs.path_map[path];
     && fs.meta_map[id].ftype.File?
@@ -369,7 +312,7 @@ module FileSys {
   {
     && WF(fs)
     && WF(fs')
-    && ValidPath(fs, path)
+    && ValidPath(fs.path_map, path)
     && var id := fs.path_map[path];
     && fs'.path_map == fs.path_map
     && fs'.meta_map == fs.meta_map[id := MetaDataUpdateTime(fs.meta_map[id], atime, mtime, ctime)]
@@ -379,7 +322,7 @@ module FileSys {
   predicate ValidDirEntry(fs: FileSys, de: DirEntry)
   requires WF(fs)
   {
-    && ValidPath(fs, de.path) // valid path
+    && ValidPath(fs.path_map, de.path) // valid path
     && de.id == fs.path_map[de.path]
     && de.ftype == fs.meta_map[de.id].ftype
   }
@@ -388,7 +331,7 @@ module FileSys {
   {
     && WF(fs)
     && fs' == fs
-    && ValidPath(fs, dir)
+    && ValidPath(fs.path_map, dir)
     && fs.meta_map[fs.path_map[dir]].ftype.Directory?
     && (start.Some? ==> InDir(dir, start.value))
     // results consistent with filesys content
@@ -400,7 +343,7 @@ module FileSys {
     // results don't skip over any valid entry
     && (forall path |
         && IsDirEntry(dir, path)
-        && ValidPath(fs, path)
+        && ValidPath(fs.path_map, path)
         && (start.Some? ==> SeqComparison.lte(path, start.value))
         && (!done && |results| > 0 ==> SeqComparison.lt(results[|results|-1].path, path))
         :: (exists i :: 0 <= i < |results| && results[i].path == path))
@@ -439,8 +382,6 @@ module FileSys {
       case RenameStep(source, dest, ctime) => Rename(fs, fs', source, dest, ctime)
       case LinkStep(source, dest, ctime) => Link(fs, fs', source, dest, ctime)
       case ChangeAttrStep(path, perm, uid, gid, ctime) => ChangeAttr(fs, fs', path, perm, uid, gid, ctime)
-      // case ChmodStep(path, mode, ctime) => Chmod(fs, fs', path, mode, ctime)
-      // case ChownStep(path, uid, gid) => Chown(fs, fs', path, uid, gid)
       case TruncateStep(path, size, time) => Truncate(fs, fs', path, size, time)
       case ReadStep(path, offset, size, data) => Read(fs, fs', path, offset, size, data)
       case WriteStep(path, offset, size, data, time) => Write(fs, fs', path, offset, size, data, time)
@@ -459,52 +400,52 @@ module FileSys {
   {
     && WF(fs)
     // Path map internal concistency: invalid path isn't allocated
-    && (forall path | !ValidPath(fs, path) :: fs.path_map[path] == DefaultId)
+    && (forall path | !ValidPath(fs.path_map, path) :: fs.path_map[path] == DefaultId)
     // Metadata map internal consistency: directory has no hardlinks
-    && (forall path | ValidPath(fs, path) :: 
+    && (forall path | ValidPath(fs.path_map, path) :: 
       var m := fs.meta_map[fs.path_map[path]];
       && (m.ftype.Directory? ==> m.nlink == 1))
     // Path and meta map consistency: directory structure is connected
-    && (forall path | ValidPath(fs, path) :: ValidParentDir(fs, path))
+    && (forall path | ValidPath(fs.path_map, path) && path != RootDir ::
+      var parentdir := GetParentDir(path);
+      && ValidPath(fs.path_map, parentdir)
+      && fs.meta_map[fs.path_map[parentdir]].ftype.Directory?)
     // Path and meta map consistency: allocated path has non empty metadata
-    && (forall path | ValidPath(fs, path) :: fs.meta_map[fs.path_map[path]] != EmptyMetaData())
+    && (forall path | ValidPath(fs.path_map, path) :: fs.meta_map[fs.path_map[path]] != EmptyMetaData())
     // Meta and data map consistency: metadata size is consistent with actual data size
-    && (forall path | ValidPath(fs, path) ::
+    && (forall path | ValidPath(fs.path_map, path) ::
       var id := fs.path_map[path];
       && fs.meta_map[id].size == |fs.data_map[id]|)
+
     // Q: also require negative side?
     // eg. requiring meta map to have empty metadata for unallocated id entries
     // can do so by generating a set of ids that are allocated and write conditions based on that
   }
 
   lemma InitImpliesInv(fs: FileSys)
+  requires Init(fs)
+  ensures Inv(fs)
   {
   }
 
-  lemma NextPreservesInv(fs: FileSys, fs': FileSys) // TODO: add ui op
+  // TODO: add ui op
+  lemma NextPreservesInv(fs: FileSys, fs': FileSys)
+  requires Inv(fs)
+  requires Next(fs, fs')
+  ensures Inv(fs')
   {
+    var step :| NextStep(fs, fs', step);
+    match step {
+      case CreateStep(path, id, m) => { assume false; assert Inv(fs'); }     
+      case DeleteStep(path, ctime) => {  assume false; assert Inv(fs'); }     
+      case SymLinkStep(source, dest, id, m) => { assume false;  assert Inv(fs'); }
+      case RenameStep(source, dest, ctime) =>{ assume false; assert Inv(fs'); }     
+      case LinkStep(source, dest, ctime) =>{ assume false; assert Inv(fs'); }     
+      case ChangeAttrStep(path, perm, uid, gid, ctime) =>{  assume false; assert Inv(fs'); }     
+      case TruncateStep(path, size, time) => { assume false; assert Inv(fs'); }     
+      case WriteStep(path, offset, size, data, time) =>{  assume false;assert Inv(fs'); }
+      case UpdateTimeStep(path, atime, mtime, ctime) => { assume false;  assert Inv(fs'); }
+      case _ => { assert Inv(fs'); }
+    }
   }
-  
-    /*
-      | MknodStep(path: Path, mode: Mode, rdev_id: int) // will have entry in data map
-      | MkdirStep(path: Path, mode: Mode) // only entry in metadata
-      | UnlinkStep(path: Path) // remove a file
-      | RmdirStep(path: Path)
-      | OpenStep(path: Path) 
-      | FlushStep(path: Path) skipped as it doesn't change the filesys?
-      | ReleaseStep(path: Path)
-      | FSyncStep(path: Path) // skipped here
-      | OpenDirStep(path: Path)
-      | ReleaseDirStep(path: Path)
-      | FSyncDir()
-      | DestroyFS // should this exist?
-      | SetXattrStep()
-      | GetXattrStep()
-      | ListXattrStep()
-      | RemoveXattrStep()
-
-      ignored fuse_ops:
-        access (relying on kernel vfs), create (create + open), destroy (clean up a filesys), lock (flock), 
-        bmap (map inode # to blk #), fallocate and so on
-    */
 }
