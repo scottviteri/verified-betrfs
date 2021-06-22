@@ -28,7 +28,7 @@ module PathSpec {
     && path != dir
     && |path| > |dir|
     && path[..|dir|] == dir
-    && path[|dir|] as int == '/' as int
+    // && path[|dir|] as int == '/' as int
   }
 
   predicate IsEmptyDir(path_map: PathMap, dir: Path)
@@ -44,25 +44,43 @@ module PathSpec {
     // && (forall i | |dir| < i < |path| :: path[i] as int != '/' as int) // equivalent
   }
 
+  function GetParentDirIter(path: Path, i: int): (dir: Path)
+  requires 0 <= i < |path|
+  ensures |dir| < |path|
+  ensures path[..|dir|] == dir
+  {
+    if path[i] as int == '/' as int then (
+      if i == 0 && |path| > 1 then path[..i+1] else path[..i]
+    ) else (
+      if i == 0 then [] else GetParentDirIter(path, i-1)
+    )
+  }
+
   function GetParentDir(path: Path): (dir: Path)
   {
     if |path| == 0 then path
-    else if path[|path|-1] as int == '/' as int then path[..|path|-1]
-    else GetParentDir(path[..|path|-1])
+    else GetParentDirIter(path, |path|-1)
   }
 
-  predicate ValidPath(path_map: PathMap, path: Path)
-  requires PathComplete(path_map)
+  lemma GetParentDirImpliesInDir(path: Path, dir: Path)
+  requires |dir| > 0
+  requires GetParentDir(path) == dir
+  ensures InDir(dir, path)
   {
-    && path_map[path] != DefaultId
   }
 
-  predicate ValidNewPath(path_map: PathMap, path: Path)
-  requires PathComplete(path_map)
-  {
-    var parentdir := GetParentDir(path);
-    && ValidPath(path_map, parentdir)
-    && IsDirEntry(parentdir, path)
-    && path_map[path] == DefaultId
-  }
+  // predicate ValidPath(path_map: PathMap, path: Path)
+  // requires PathComplete(path_map)
+  // {
+  //   && path_map[path] != DefaultId
+  // }
+
+  // predicate ValidNewPath(path_map: PathMap, path: Path)
+  // requires PathComplete(path_map)
+  // {
+  //   var parentdir := GetParentDir(path);
+  //   && ValidPath(path_map, parentdir)
+  //   && IsDirEntry(parentdir, path)
+  //   && path_map[path] == DefaultId
+  // }
 }
