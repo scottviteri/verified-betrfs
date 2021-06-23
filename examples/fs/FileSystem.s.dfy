@@ -504,37 +504,19 @@ module FileSystem {
   ensures Inv(fs')
   {
     match step {
-      case CreateStep(path, id, m) => CreatePreservesInv(fs, fs', path, id, m);
       case DeleteStep(path, ctime) => DeletePreservesInv(fs, fs', path, ctime);
-      case SymLinkStep(source, dest, id, m) => SymLinkPreservesInv(fs, fs', source, dest, id, m);
       case RenameStep(source, dest, ctime) => RenamePreservesInv(fs, fs', source, dest, ctime);   
-      case LinkStep(source, dest, ctime) => LinkPreservesInv(fs, fs', source, dest, ctime);    
-      case ChangeAttrStep(path, perm, uid, gid, ctime) => ChangeAttrPreservesInv(fs, fs', path, perm, uid, gid, ctime);
-      case TruncateStep(path, size, time) => TruncatePreservesInv(fs, fs', path, size, time);
-      case WriteStep(path, offset, size, data, time) => WritePreservesInv(fs, fs', path, offset, size, data, time); 
-      case UpdateTimeStep(path, atime, mtime, ctime) => UpdateTimePreservesInv(fs, fs', path, atime, mtime, ctime);
-      case _ => { assert Inv(fs'); }
+      case LinkStep(source, dest, ctime) => LinkPreservesInv(fs, fs', source, dest, ctime);
+      case _ => { 
+        if step.CreateStep? || step.SymLinkStep? || step.ChangeAttrStep? 
+        || step.TruncateStep? || step.WriteStep? || step.UpdateTimeStep? {
+          SimpleStepPreservesInv(fs, fs', step);
+        }
+      }
     }
   }
 
   /// Invariant proofs
-
-  lemma CreatePreservesInv(fs: FileSys, fs': FileSys, path: Path, id: int, m: MetaData)
-  requires Inv(fs)
-  requires Create(fs, fs', path, id, m)
-  ensures Inv(fs')
-  {
-    forall p
-    ensures ConsistentData(fs', p)
-    ensures ValidLinks(fs', p)
-    ensures ValidPath(fs', p) && p != RootDir ==> ParentDirIsDir(fs, p)
-    {
-      if p != path {
-        assert ConsistentData(fs, p); // observe
-        assert ValidLinks(fs, p); // observe
-      }
-    }
-  }
 
   lemma RemovePathCorrect(paths: seq<Path>, path: Path)
   requires path in paths
@@ -633,24 +615,6 @@ module FileSystem {
     assert Inv(fs');
   }
 
-  lemma SymLinkPreservesInv(fs: FileSys, fs': FileSys, source: Path, dest: Path, id: int, m: MetaData)
-  requires Inv(fs)
-  requires SymLink(fs, fs', source, dest, id, m)
-  ensures Inv(fs')
-  {
-    forall p
-    ensures ConsistentData(fs', p)
-    ensures ValidLinks(fs', p)
-    ensures ValidPath(fs', p) && p != RootDir ==> ParentDirIsDir(fs, p)
-    {
-      if p != dest {
-        assert ConsistentData(fs, p); // observe
-        assert ValidLinks(fs, p); // observe
-      }
-    }
-    assert Inv(fs');
-  }
-
   lemma RenamePreservesInv(fs: FileSys, fs': FileSys, source: Path, dest: Path, ctime: Time)
   requires Inv(fs)
   requires Rename(fs, fs', source, dest, ctime)
@@ -667,41 +631,36 @@ module FileSystem {
     assume Inv(fs');
   }
 
-  lemma ChangeAttrPreservesInv(fs: FileSys, fs': FileSys, path: Path, perm: int, uid: int, gid: int, ctime: Time)
+  lemma SimpleStepPreservesInv(fs: FileSys, fs': FileSys, step: Step)
   requires Inv(fs)
-  requires ChangeAttr(fs, fs', path, perm, uid, gid, ctime)
+  requires NextStep(fs, fs', step)
+  requires step.CreateStep? || step.SymLinkStep? || step.ChangeAttrStep? 
+        || step.TruncateStep? || step.WriteStep? || step.UpdateTimeStep?
   ensures Inv(fs')
   {
-    assume Inv(fs');
+    var path := if step.SymLinkStep? then step.dest else step.path;
+
+    forall p
+    ensures ConsistentData(fs', p)
+    ensures ValidLinks(fs', p)
+    ensures ValidPath(fs', p) && p != RootDir ==> ParentDirIsDir(fs, p)
+    {
+      if p != path {
+        assert ConsistentData(fs, p); // observe
+        assert ValidLinks(fs, p); // observe
+      }
+    }
+    assert Inv(fs');
   }
 
-  lemma TruncatePreservesInv(fs: FileSys, fs': FileSys, path: Path, size: int, time: Time)
-  requires Inv(fs)
-  requires Truncate(fs, fs', path, size, time)
-  ensures Inv(fs')
-  {
-    assume Inv(fs');
-  }
-
-  lemma WritePreservesInv(fs: FileSys, fs': FileSys, path: Path, offset: int, size: int, data: Data, time: Time)
-  requires Inv(fs)
-  requires Write(fs, fs', path, offset, size, data, time)
-  ensures Inv(fs')
-  {
-    assume Inv(fs');
-  }
-
-  lemma UpdateTimePreservesInv(fs: FileSys, fs': FileSys, path: Path, atime: Time, mtime: Time, ctime: Time)
-  requires Inv(fs)
-  requires UpdateTime(fs, fs', path, atime, mtime, ctime)
-  ensures Inv(fs')
-  {
-    assume Inv(fs');
-  }
-
-  // assert (forall path | ValidPath(fs', path) :: |path| > 0);
-  // assert (forall path :: ValidLinks(fs', path)); 
-  // assert (forall path :: ConsistentData(fs', path));
-  // assert (forall path | ValidPath(fs', path) && path != RootDir :: ParentDirIsDir(fs', path));
+  // assert WF(fs');
+  // assert fs'.meta_map[DefaultId] == EmptyMetaData();
+  // assert fs'.data_map[DefaultId] == EmptyData();
+  // assert (forall p | ValidPath(fs', p) :: |p| > 0);
+  // assert (forall p :: ValidLinks(fs', p));
+  // assert (forall p :: ConsistentData(fs', p));
   // assert (forall path | ValidPath(fs', path) :: fs'.meta_map[fs'.path_map[path]] != EmptyMetaData());
+  // assert (forall path | ValidPath(fs', path) && path != RootDir :: ParentDirIsDir(fs', path));
+  // assume (forall id | fs'.meta_map[id] != EmptyMetaData() :: NoUnknownLinks(fs', id));
+  // assert Inv(fs');
 }
