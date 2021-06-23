@@ -36,20 +36,22 @@ module FileSystem {
 
   /// Inv conditions
 
-  predicate ConsistentLinks(fs: FileSys, path: Path)
+  predicate ValidLinks(fs: FileSys, path: Path)
   requires WF(fs)
   {
     var id := fs.path_map[path];
     var m := fs.meta_map[id];
     && m.nlink == |m.paths|
     && (m.ftype.Directory? ==> m.nlink == 1)
+    && (forall i, j | 0 <= i < j < |m.paths| :: m.paths[i] != m.paths[j]) // paths are unique
   }
 
   predicate NoUnknownLinks(fs: FileSys, id: int)
   requires WF(fs)
   {
     var m := fs.meta_map[id];
-    && (forall path | ValidPath(fs, path) && fs.path_map[path] == id :: path in m.paths)
+    && (forall path :: if path in m.paths then fs.path_map[path] == id else fs.path_map[path] != id)
+    // && (forall path | ValidPath(fs, path) && fs.path_map[path] == id :: path in m.paths)
   }
 
   predicate ParentDirIsDir(fs: FileSys, path: Path)
@@ -460,7 +462,6 @@ module FileSystem {
     exists step :: NextStep(fs, fs', step)
   }
 
-
   predicate Inv(fs: FileSys)
   {
     && WF(fs)
@@ -468,13 +469,11 @@ module FileSystem {
     && fs.meta_map[DefaultId] == EmptyMetaData()
     && fs.data_map[DefaultId] == EmptyData()
     // Path map internal invariant :: all valid paths must be greater than 0
-    // && (forall path | ValidPath(fs, path) :: |path| > 0)
-
+    && (forall path | ValidPath(fs, path) :: |path| > 0) // all valid path must 
     // Metadata map internal consistency: nlink consitency and directory has no hardlinks
-    && (forall path :: ConsistentLinks(fs, path))
+    && (forall path :: ValidLinks(fs, path))
     // Meta and data map consistency: metadata size is consistent with actual data size
     && (forall path :: ConsistentData(fs, path))
-    // && (forall path | ValidPath(fs, path) :: ConsistentLinks(fs, path))
     // Path and meta map consistency: directory structure is connected
     && (forall path | ValidPath(fs, path) && path != RootDir :: ParentDirIsDir(fs, path))
     // Path and meta map consistency: allocated path has non empty metadata
@@ -496,19 +495,29 @@ module FileSystem {
   ensures Inv(fs')
   {
     var step :| NextStep(fs, fs', step);
+    NextStepPreservesInv(fs, fs', step);
+  }
+
+  lemma NextStepPreservesInv(fs: FileSys, fs': FileSys, step: Step)
+  requires Inv(fs)
+  requires NextStep(fs, fs', step)
+  ensures Inv(fs')
+  {
     match step {
       case CreateStep(path, id, m) => CreatePreservesInv(fs, fs', path, id, m);
       case DeleteStep(path, ctime) => DeletePreservesInv(fs, fs', path, ctime);
-      case SymLinkStep(source, dest, id, m) => { assume false;  assert Inv(fs'); }
-      case RenameStep(source, dest, ctime) =>{ assume false; assert Inv(fs'); }     
-      case LinkStep(source, dest, ctime) =>{ assume false; assert Inv(fs'); }     
-      case ChangeAttrStep(path, perm, uid, gid, ctime) =>{  assume false; assert Inv(fs'); }     
-      case TruncateStep(path, size, time) => { assume false; assert Inv(fs'); }     
-      case WriteStep(path, offset, size, data, time) =>{  assume false;assert Inv(fs'); }
-      case UpdateTimeStep(path, atime, mtime, ctime) => { assume false;  assert Inv(fs'); }
+      case SymLinkStep(source, dest, id, m) => SymLinkPreservesInv(fs, fs', source, dest, id, m);
+      case RenameStep(source, dest, ctime) => RenamePreservesInv(fs, fs', source, dest, ctime);   
+      case LinkStep(source, dest, ctime) => LinkPreservesInv(fs, fs', source, dest, ctime);    
+      case ChangeAttrStep(path, perm, uid, gid, ctime) => ChangeAttrPreservesInv(fs, fs', path, perm, uid, gid, ctime);
+      case TruncateStep(path, size, time) => TruncatePreservesInv(fs, fs', path, size, time);
+      case WriteStep(path, offset, size, data, time) => WritePreservesInv(fs, fs', path, offset, size, data, time); 
+      case UpdateTimeStep(path, atime, mtime, ctime) => UpdateTimePreservesInv(fs, fs', path, atime, mtime, ctime);
       case _ => { assert Inv(fs'); }
     }
   }
+
+  /// Invariant proofs
 
   lemma CreatePreservesInv(fs: FileSys, fs': FileSys, path: Path, id: int, m: MetaData)
   requires Inv(fs)
@@ -517,14 +526,21 @@ module FileSystem {
   {
     forall p
     ensures ConsistentData(fs', p)
-    ensures ConsistentLinks(fs', p)
+    ensures ValidLinks(fs', p)
     ensures ValidPath(fs', p) && p != RootDir ==> ParentDirIsDir(fs, p)
     {
       if p != path {
         assert ConsistentData(fs, p); // observe
-        assert ConsistentLinks(fs, p); // observe
+        assert ValidLinks(fs, p); // observe
       }
     }
+  }
+
+  lemma RemovePathCorrect(paths: seq<Path>, path: Path)
+  requires path in paths
+  requires forall i, j | 0 <= i < j < |paths| :: paths[i] != paths[j]
+  ensures path !in RemovePath(paths, path)
+  {
   }
 
   lemma DeletePreservesInv(fs: FileSys, fs': FileSys, path: Path, ctime: Time)
@@ -533,66 +549,159 @@ module FileSystem {
   ensures Inv(fs')
   {
     forall p
-    ensures ConsistentLinks(fs', p)
+    ensures ValidLinks(fs', p)
     ensures ConsistentData(fs', p)
-    // ensures ValidPath(fs', p) ==> |p| > 0
-    ensures ValidPath(fs', p) ==> fs'.meta_map[fs'.path_map[p]] != EmptyMetaData()
-    ensures ValidPath(fs', p) && p != RootDir ==> ParentDirIsDir(fs', p)
     {
-      // assume false;
       if p != path {
-        assert ConsistentLinks(fs, p); // observe
+        assert ValidLinks(fs, p); // observe
         assert ConsistentData(fs, p); // observe
-        // assert ValidPath(fs, p) ==> |p| > 0;
-        // assume ValidPath(fs', p) ==> |p| > 0;
+      }
+    }
 
-        if ValidPath(fs', p) && p != RootDir {
-          var parent_dir := GetParentDir(p);
-          var parent_id := fs.path_map[parent_dir];
-          var parent_meta := fs.meta_map[parent_id];
+    forall p | ValidPath(fs', p)
+    ensures |p| > 0
+    ensures fs'.meta_map[fs'.path_map[p]] != EmptyMetaData()
+    ensures p != RootDir ==> ParentDirIsDir(fs', p)
+    {
+      assert |p| > 0; // observe
+      assert p != path;
 
-          // if parent_dir == p {
-          //   assert ValidPath(fs, parent_dir);
-          //   assert ValidPath(fs, parent_dir);
+      var id := fs.path_map[path];
+      var m := fs.meta_map[id];
+      
+      assert ValidLinks(fs, path); // observe
+      assert m.nlink == |m.paths|;
 
-          //   assert false;
-          // }
+      if m.nlink == 1 {
+        assert m.paths == [path];
+        assert NoUnknownLinks(fs, id);
+        assert fs.path_map[p] != id;
+      } else {
+        assert m.nlink > 1;
+        if fs'.path_map[p] == id {
+          assert fs'.meta_map[id] != EmptyMetaData();
+        }
+      }
 
-          // assert parent_dir != p;
+      assert fs'.meta_map[fs'.path_map[p]] != EmptyMetaData();
 
-          if parent_id == fs.path_map[path] {
-            if parent_meta.nlink == 1 {
+      if p != RootDir {
+        var parent_dir := GetParentDir(p);
+        var parent_id := fs.path_map[parent_dir];
+        var parent_meta := fs.meta_map[parent_id];
 
-              assume false;
-              assert ConsistentLinks(fs, parent_dir); // observe
-              assert path == parent_dir;
-              GetParentDirImpliesInDir(p, path);
-              assert false;
-            } else {
-            // if parent_id is the same covers the other case
-          // assert parent_dir != path;
-    //       && ValidPath(fs, parentdir)
-    // && fs.meta_map[fs.path_map[parentdir]].ftype.Directory?
-          // assert ParentDirIsDir(fs, p);
-              assume false;
+        if parent_dir == p {
+          assert ValidPath(fs, parent_dir);
+          assert false;
+        }
+
+        assert parent_dir != p;
+        assert ParentDirIsDir(fs, p); // observe
+
+        if parent_id == id {
+          assert false;
+        }
+      }
+    }
+
+    forall id | fs'.meta_map[id] != EmptyMetaData()
+    ensures NoUnknownLinks(fs', id)
+    {
+      if id == fs.path_map[path] {
+        var m := fs.meta_map[id];
+        if m.nlink == 1 {
+          assert fs'.meta_map[id] == EmptyMetaData();
+          assert false;
+        } else {
+          var m' := fs'.meta_map[id];
+
+          assert path !in m'.paths by {
+            assert ValidLinks(fs, path);
+            RemovePathCorrect(m.paths, path);
+          }
+
+          forall p | p !in m'.paths
+          ensures fs'.path_map[p] != id
+          {
+            if p == path {
+              assert fs'.path_map[p] == DefaultId;
             }
-          } else {
-            assert ParentDirIsDir(fs, p); // observe
-            assert ParentDirIsDir(fs', p); // observe
           }
         }
       }
     }
-    // assume false;
-    // && (forall path | ValidPath(fs, path) :: ConsistentLinks(fs, path))
-    // // Path and meta map consistency: paths is consistent with ids mapped from path_map
-    // && (forall id | fs.meta_map[id] != EmptyMetaData() :: NoUnknownLinks(fs, id))
-    // // Path and meta map consistency: directory structure is connected
-    // && (forall path | ValidPath(fs, path) && path != RootDir :: ParentDirIsDir(fs, path))
-    // // Path and meta map consistency: allocated path has non empty metadata
-    // && (forall path | ValidPath(fs, path) :: fs.meta_map[fs.path_map[path]] != EmptyMetaData())
-    // // Meta and data map consistency: metadata size is consistent with actual data size
-    // && (forall path :: ConsistentData(fs, path))
     assert Inv(fs');
   }
+
+  lemma SymLinkPreservesInv(fs: FileSys, fs': FileSys, source: Path, dest: Path, id: int, m: MetaData)
+  requires Inv(fs)
+  requires SymLink(fs, fs', source, dest, id, m)
+  ensures Inv(fs')
+  {
+    forall p
+    ensures ConsistentData(fs', p)
+    ensures ValidLinks(fs', p)
+    ensures ValidPath(fs', p) && p != RootDir ==> ParentDirIsDir(fs, p)
+    {
+      if p != dest {
+        assert ConsistentData(fs, p); // observe
+        assert ValidLinks(fs, p); // observe
+      }
+    }
+    assert Inv(fs');
+  }
+
+  lemma RenamePreservesInv(fs: FileSys, fs': FileSys, source: Path, dest: Path, ctime: Time)
+  requires Inv(fs)
+  requires Rename(fs, fs', source, dest, ctime)
+  ensures Inv(fs')
+  {
+    assume Inv(fs');
+  }
+
+  lemma LinkPreservesInv(fs: FileSys, fs': FileSys, source: Path, dest: Path, ctime: Time)
+  requires Inv(fs)
+  requires Link(fs, fs', source, dest, ctime)
+  ensures Inv(fs')
+  {
+    assume Inv(fs');
+  }
+
+  lemma ChangeAttrPreservesInv(fs: FileSys, fs': FileSys, path: Path, perm: int, uid: int, gid: int, ctime: Time)
+  requires Inv(fs)
+  requires ChangeAttr(fs, fs', path, perm, uid, gid, ctime)
+  ensures Inv(fs')
+  {
+    assume Inv(fs');
+  }
+
+  lemma TruncatePreservesInv(fs: FileSys, fs': FileSys, path: Path, size: int, time: Time)
+  requires Inv(fs)
+  requires Truncate(fs, fs', path, size, time)
+  ensures Inv(fs')
+  {
+    assume Inv(fs');
+  }
+
+  lemma WritePreservesInv(fs: FileSys, fs': FileSys, path: Path, offset: int, size: int, data: Data, time: Time)
+  requires Inv(fs)
+  requires Write(fs, fs', path, offset, size, data, time)
+  ensures Inv(fs')
+  {
+    assume Inv(fs');
+  }
+
+  lemma UpdateTimePreservesInv(fs: FileSys, fs': FileSys, path: Path, atime: Time, mtime: Time, ctime: Time)
+  requires Inv(fs)
+  requires UpdateTime(fs, fs', path, atime, mtime, ctime)
+  ensures Inv(fs')
+  {
+    assume Inv(fs');
+  }
+
+  // assert (forall path | ValidPath(fs', path) :: |path| > 0);
+  // assert (forall path :: ValidLinks(fs', path)); 
+  // assert (forall path :: ConsistentData(fs', path));
+  // assert (forall path | ValidPath(fs', path) && path != RootDir :: ParentDirIsDir(fs', path));
+  // assert (forall path | ValidPath(fs', path) :: fs'.meta_map[fs'.path_map[path]] != EmptyMetaData());
 }

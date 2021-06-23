@@ -62,25 +62,10 @@ module PathSpec {
     else GetParentDirIter(path, |path|-1)
   }
 
-  lemma GetParentDirImpliesInDir(path: Path, dir: Path)
-  requires |dir| > 0
-  requires GetParentDir(path) == dir
-  ensures InDir(dir, path)
-  {
-  }
-
-  // predicate ValidPath(path_map: PathMap, path: Path)
-  // requires PathComplete(path_map)
+  // lemma GetParentDirImpliesInDir(path: Path, dir: Path)
+  // requires |dir| > 0
+  // requires GetParentDir(path) == dir
+  // ensures InDir(dir, path)
   // {
-  //   && path_map[path] != DefaultId
-  // }
-
-  // predicate ValidNewPath(path_map: PathMap, path: Path)
-  // requires PathComplete(path_map)
-  // {
-  //   var parentdir := GetParentDir(path);
-  //   && ValidPath(path_map, parentdir)
-  //   && IsDirEntry(parentdir, path)
-  //   && path_map[path] == DefaultId
   // }
 }
