@@ -620,6 +620,17 @@ module FileSystem {
   requires Rename(fs, fs', source, dest, ctime)
   ensures Inv(fs')
   {
+    assert WF(fs');
+    assert fs'.meta_map[DefaultId] == EmptyMetaData();
+    assert fs'.data_map[DefaultId] == EmptyData();
+    assert (forall p | ValidPath(fs', p) :: |p| > 0);
+
+  // assert (forall p :: ValidLinks(fs', p));
+  // assert (forall p :: ConsistentData(fs', p));
+  // assert (forall path | ValidPath(fs', path) :: fs'.meta_map[fs'.path_map[path]] != EmptyMetaData());
+  // assert (forall path | ValidPath(fs', path) && path != RootDir :: ParentDirIsDir(fs', path));
+  // assert (forall id | fs'.meta_map[id] != EmptyMetaData() :: NoUnknownLinks(fs', id));
+  // assert Inv(fs');
     assume Inv(fs');
   }
 
@@ -628,7 +639,34 @@ module FileSystem {
   requires Link(fs, fs', source, dest, ctime)
   ensures Inv(fs')
   {
-    assume Inv(fs');
+    var id := fs.path_map[source];
+    var m := fs.meta_map[id];
+    var m' := fs'.meta_map[id];
+
+    forall p
+    ensures ValidLinks(fs', p)
+    ensures ConsistentData(fs', p)
+    ensures ValidPath(fs', p) && p != RootDir ==> ParentDirIsDir(fs, p)
+    {
+      if p != dest {
+        assert ValidLinks(fs, p); // observe
+        assert ConsistentData(fs, p); // observe
+      } else {
+        assert ValidLinks(fs, source); // observe
+        assert m' == MetaDataUpdateLink(m, 1, m.paths + [dest], ctime);
+        if dest in m.paths {
+          assert fs.path_map[dest] == id;
+          assert false;
+        }
+        assert id == fs'.path_map[dest];
+        assert ConsistentData(fs, source);
+
+        assert ParentDirIsDir(fs, dest);
+        assert GetParentDir(dest) != dest;
+        assert ParentDirIsDir(fs', dest);
+      }
+    }
+    assert Inv(fs');
   }
 
   lemma SimpleStepPreservesInv(fs: FileSys, fs': FileSys, step: Step)
@@ -652,15 +690,4 @@ module FileSystem {
     }
     assert Inv(fs');
   }
-
-  // assert WF(fs');
-  // assert fs'.meta_map[DefaultId] == EmptyMetaData();
-  // assert fs'.data_map[DefaultId] == EmptyData();
-  // assert (forall p | ValidPath(fs', p) :: |p| > 0);
-  // assert (forall p :: ValidLinks(fs', p));
-  // assert (forall p :: ConsistentData(fs', p));
-  // assert (forall path | ValidPath(fs', path) :: fs'.meta_map[fs'.path_map[path]] != EmptyMetaData());
-  // assert (forall path | ValidPath(fs', path) && path != RootDir :: ParentDirIsDir(fs', path));
-  // assume (forall id | fs'.meta_map[id] != EmptyMetaData() :: NoUnknownLinks(fs', id));
-  // assert Inv(fs');
 }
