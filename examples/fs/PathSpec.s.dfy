@@ -28,7 +28,7 @@ module PathSpec {
     && path != dir
     && |path| > |dir|
     && path[..|dir|] == dir
-    // && path[|dir|] as int == '/' as int
+    && path[|dir|] as int == '/' as int
   }
 
   predicate IsEmptyDir(path_map: PathMap, dir: Path)
@@ -62,10 +62,10 @@ module PathSpec {
     else GetParentDirIter(path, |path|-1)
   }
 
-  // lemma GetParentDirImpliesInDir(path: Path, dir: Path)
-  // requires |dir| > 0
-  // requires GetParentDir(path) == dir
-  // ensures InDir(dir, path)
-  // {
-  // }
+  lemma GetParentDirImpliesInDir(path: Path, dir: Path)
+  requires |dir| > 0
+  requires GetParentDir(path) == dir
+  ensures InDir(dir, path)
+  {
+  }
 }
