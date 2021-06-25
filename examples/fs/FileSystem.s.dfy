@@ -644,79 +644,6 @@ module FileSystem {
   {
   }
 
-  lemma lemoning(fs: FileSys, fs': FileSys, src: Path, dst: Path, ctime: Time)
-  requires Inv(fs)
-  requires Rename(fs, fs', src, dst, ctime)
-  requires RenameNonDir(fs, fs', src, dst, ctime)
-  ensures forall id | fs'.meta_map[id] != EmptyMetaData() :: NoUnknownLinks(fs', id)
-  {
-    var src_id := fs.path_map[src];
-    var dst_id := fs.path_map[dst];
-    var src_m := fs.meta_map[src_id];
-    var src_m' := MetaDataRename(src_m, src, dst, ctime);
-
-    assert ValidLinks(fs, src); // observe
-    forall id | fs'.meta_map[id] != EmptyMetaData()
-    ensures NoUnknownLinks(fs', id)
-    {
-      if id == dst_id {
-        assume false;
-      } else if id == src_id {
-
-        // assume false;
-
-        // assert fs'.meta_map[id] == src_m';
-        // assert NoUnknownLinks(fs, id);
-        // assert (forall path | path in src_m.paths :: fs.path_map[path] == id);
-
-        var tmp := RemovePath(src_m.paths, src);
-        RemovePathCorrect(src_m.paths, tmp, src);
-        assert src !in tmp;
-        assert forall p | p in tmp :: p in src_m.paths;
-
-        assert src_m'.paths == tmp + [dst];
-        assert src != dst;
-        // ConcatPathCorrect(tmp, src_m'.paths, dst);
-
-
-
-        // assert src !in src_m'.paths;
-
-        assume false;
-
-        // RemovePathCorrect(src_m.paths, RemovePath(src_m.paths, src), src);
-        // ConcatPathCorrect(RemovePath(src_m.paths, src), src_m'.paths, dst);
-
-        forall p
-        ensures p in src_m'.paths ==> fs'.path_map[p] == id
-        ensures p !in src_m'.paths ==> fs'.path_map[p] != id 
-        {
-          assume false;
-          // if p in src_m'.paths {
-          //   if p == dst {
-          //     assume false;
-          //   } else {
-          //     // assert p in src_m.paths;
-
-
-          //     assume false;
-          //   }
-          // } else {
-          //   assume false;
-
-          // }
-        }
-        // assert NoUnknownLinks(fs', id);
-    //  (forall path :: if path in m.paths then fs.path_map[path] == id else fs.path_map[path] != id)
-      } else {
-        // assert fs.meta_map[id] == fs'.meta_map[id];
-        assume false;
-        // && fs'.meta_map == fs.meta_map[src_id := src_m'][dst_id := MetaDataDelete(fs.meta_map[dst_id], dst, ctime)]
-        // assert NoUnknownLinks(fs, id);
-      }
-    }
-  }
-
   lemma RenameNonDirPreservesInv(fs: FileSys, fs': FileSys, src: Path, dst: Path, ctime: Time)
   requires Inv(fs)
   requires Rename(fs, fs', src, dst, ctime)
@@ -790,23 +717,77 @@ module FileSystem {
       }
 
       if p != RootDir {
+        var parent_dir := GetParentDir(p);
+        var parent_id := fs.path_map[parent_dir];
+        var parent_meta := fs.meta_map[parent_id];
 
+        if parent_dir == p {
+          assert ValidPath(fs, parent_dir);
+          assert false;
+        }
 
-        assume ParentDirIsDir(fs', p);
+        assert parent_dir != p;
+        assert ParentDirIsDir(fs, p); // observe
+
+        if parent_id == src_id {
+          assert parent_meta.ftype.Directory?;
+          assert false;
+        } else if parent_id == dst_id {
+          assert fs.meta_map[dst_id].ftype.Directory?;
+          assert false;
+        } else {
+          assert ParentDirIsDir(fs', p);
+        }
       }
-
-
-
-    // && fs'.meta_map == fs.meta_map[src_id := src_m'][dst_id := MetaDataDelete(fs.meta_map[dst_id], dst, ctime)]
-    //   && fs'.data_map == fs.data_map[dst_id := DataDelete(fs, dst_id)])
-    // && (!ValidPath(fs, dst) ==>
-    //   && fs'.meta_map == fs.meta_map[src_id := src_m']
     }
 
     assert (forall path | ValidPath(fs', path) :: fs'.meta_map[fs'.path_map[path]] != EmptyMetaData());
     assert (forall path | ValidPath(fs', path) && path != RootDir :: ParentDirIsDir(fs', path));
 
-    lemoning(fs, fs', src, dst, ctime);
+    forall id | fs'.meta_map[id] != EmptyMetaData()
+    ensures NoUnknownLinks(fs', id)
+    {
+      if id == dst_id {
+        assert fs'.meta_map[id] == MetaDataDelete(fs.meta_map[dst_id], dst, ctime);
+        if fs.meta_map[id].nlink == 1 {
+          assert false;
+        } else {
+          var m := fs.meta_map[dst_id];
+          var m' := fs'.meta_map[dst_id];
+          assert ValidLinks(fs, dst);
+          assert m'.paths == RemovePath(m.paths, dst);
+          RemovePathCorrect(m.paths, m'.paths, dst);
+          assert NoUnknownLinks(fs, id);
+          assert NoUnknownLinks(fs', id);
+        }
+      } else if id == src_id {
+        assert fs'.meta_map[id] == src_m';
+        assert ValidLinks(fs, src);
+        var tmp := RemovePath(src_m.paths, src);
+        RemovePathCorrect(src_m.paths, tmp, src);
+        assert NoUnknownLinks(fs, id);
+        assert src_m'.paths == tmp + [dst];
+        assert src !in src_m'.paths;
+        assert dst in src_m'.paths;
+
+        forall p 
+        ensures p in src_m'.paths ==> fs'.path_map[p] == id
+        ensures p !in src_m'.paths ==> fs'.path_map[p] != id 
+        {
+          if p in src_m'.paths {
+            if p in tmp {
+              assert fs'.path_map[p] == id;
+            } else {
+              assert p == dst;
+              assert fs'.path_map[dst] == id;
+            }
+          } else {
+            assert fs'.path_map[p] != id;
+          }
+        }
+      }
+    }
+
     assert (forall id | fs'.meta_map[id] != EmptyMetaData() :: NoUnknownLinks(fs', id));
     assert Inv(fs');
   }
