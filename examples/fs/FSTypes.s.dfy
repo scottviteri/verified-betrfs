@@ -24,8 +24,6 @@ module FSTypes {
 
   // metadata tracked by filesys
   datatype MetaData = MetaData(
-    nlink: int,       // number of hard links
-    paths: seq<Path>, // paths that are hardlinked to this metadata
     size: int,        // size of file
     ftype: FileType,  // type of file
     perm: int,        // permission
@@ -40,18 +38,16 @@ module FSTypes {
   {
     && m.atime == m.ctime == m.mtime
     && m.size == 0
-    && m.nlink == 1
-    && m.paths == [path]
   }
 
   function EmptyMetaData(): MetaData
   {
-    MetaData(0, [], 0, File, 0, 0, 0, Time(0,0), Time(0,0), Time(0,0))
+    MetaData(-1, File, 0, 0, 0, Time(0,0), Time(0,0), Time(0,0))
   }
 
   function InitRootMetaData(): MetaData
   {
-    MetaData(1, [RootDir], 0, Directory, 755, 0, 0, Time(0,0), Time(0,0), Time(0,0))
+    MetaData(0, Directory, 755, 0, 0, Time(0,0), Time(0,0), Time(0,0))
   }
 
   function EmptyData(): Data

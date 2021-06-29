@@ -28,7 +28,7 @@ module PathSpec {
     && path != dir
     && |path| > |dir|
     && path[..|dir|] == dir
-    && path[|dir|] as int == '/' as int
+    && (|dir| > 1 ==> path[|dir|] as int == '/' as int)
   }
 
   predicate IsEmptyDir(path_map: PathMap, dir: Path)
@@ -48,6 +48,7 @@ module PathSpec {
   requires 0 <= i < |path|
   ensures |dir| < |path|
   ensures path[..|dir|] == dir
+  ensures |dir| > 1 ==> path[|dir|] as int == '/' as int 
   {
     if path[i] as int == '/' as int then (
       if i == 0 && |path| > 1 then path[..i+1] else path[..i]
