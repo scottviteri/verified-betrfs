@@ -23,31 +23,27 @@ module FSTypes {
   datatype Time = Time(seconds: int, nanoseconds: int)
 
   // metadata tracked by filesys
-  datatype MetaData = MetaData(
-    size: int,        // size of file
-    ftype: FileType,  // type of file
-    perm: int,        // permission
-    uid: int,         // user ID
-    gid: int,         // group ID
-    atime: Time,      // last accessed time
-    mtime: Time,      // last modified tme 
-    ctime: Time       // last status change time
-  )
+  datatype MetaData = 
+    | EmptyMetaData
+    | MetaData(
+        ftype: FileType,  // type of file
+        perm: int,        // permission
+        uid: int,         // user ID
+        gid: int,         // group ID
+        atime: Time,      // last accessed time
+        mtime: Time,      // last modified tme 
+        ctime: Time       // last status change time
+      )
 
   predicate ValidNewMetaData(m: MetaData, path: Path)
   {
+    && m.MetaData?
     && m.atime == m.ctime == m.mtime
-    && m.size == 0
-  }
-
-  function EmptyMetaData(): MetaData
-  {
-    MetaData(-1, File, 0, 0, 0, Time(0,0), Time(0,0), Time(0,0))
   }
 
   function InitRootMetaData(): MetaData
   {
-    MetaData(0, Directory, 755, 0, 0, Time(0,0), Time(0,0), Time(0,0))
+    MetaData(Directory, 755, 0, 0, Time(0,0), Time(0,0), Time(0,0))
   }
 
   function EmptyData(): Data
